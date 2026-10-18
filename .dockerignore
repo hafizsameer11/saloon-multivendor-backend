@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+**/.git
+**/.cursor
+**/_archive
+**/*.tar.gz
+**/uploads/*
+!**/uploads/.gitkeep
+**/*.log
+**/.DS_Store
+apps/mobile
+docs-design-preview.html
+agent-transcripts

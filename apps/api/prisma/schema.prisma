@@ -1,0 +1,610 @@
+// MyBeauty+ — MySQL schema (Prisma 6)
+// Conventions:
+//  * money is stored as integer CENTS (…Cents). The API converts to euros for the apps.
+//  * commission is stored as basis points (1500 = 15%).
+//  * ordered image lists are JSON arrays of URLs (first = cover).
+//  * every movement of seller money is an append-only LedgerEntry.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  customer
+  seller
+  admin
+}
+
+enum SalonStatus {
+  draft
+  pending
+  needs_info
+  approved
+  rejected
+  suspended
+}
+
+enum SalonCategory {
+  parrucchiere
+  barber
+  unghie
+  estetica
+  spa
+}
+
+enum ProductCategory {
+  capelli
+  unghie
+  viso
+  corpo
+  barba
+  strumenti
+}
+
+enum ProductStatus {
+  draft
+  review
+  published
+  rejected
+}
+
+enum BookingStatus {
+  awaiting_payment
+  booked
+  confirmed
+  in_progress
+  completed
+  no_show
+  cancelled
+}
+
+enum PaymentMode {
+  in_salon
+  deposit
+  card
+}
+
+enum OrderStatus {
+  pending_payment
+  paid
+  cancelled
+}
+
+enum SubOrderStatus {
+  awaiting_payment
+  received
+  preparing
+  shipped
+  ready_pickup
+  delivered
+  cancelled
+  refunded
+}
+
+enum ShippingMethod {
+  standard
+  pickup
+}
+
+enum PaymentStatus {
+  requires_payment
+  succeeded
+  failed
+  cancelled
+  refunded
+  partially_refunded
+}
+
+enum LedgerType {
+  sale // money a customer paid online for this salon
+  cash_commission // commission owed on money paid in the salon (amount 0, commission > 0)
+  refund // negative sale
+  adjustment // manual admin correction
+}
+
+enum LedgerStatus {
+  pending // not yet withdrawable (service not done / return window open)
+  available // can be withdrawn
+  withdrawn // included in a paid withdrawal
+}
+
+enum WithdrawalStatus {
+  requested
+  approved
+  paid
+  rejected
+  failed
+}
+
+model User {
+  id            String    @id @default(cuid())
+  role          Role      @default(customer)
+  name          String
+  email         String    @unique
+  phone         String    @default("")
+  passwordHash  String
+  avatar        String?   @db.Text
+  city          String?
+  blocked       Boolean   @default(false)
+  loyaltyPoints Int       @default(0)
+  lang          String    @default("it")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  salon          Salon?
+  addresses      Address[]
+  refreshTokens  RefreshToken[]
+  passwordResets PasswordReset[]
+  favourites     Favourite[]
+  bookings       Booking[]
+  orders         Order[]
+  reviews        Review[]
+  notifications  Notification[]
+  payments       Payment[]
+  tickets        SupportTicket[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  userAgent String?   @db.VarChar(255)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Address {
+  id        String  @id @default(cuid())
+  userId    String
+  label     String
+  name      String
+  street    String
+  city      String
+  zip       String
+  province  String
+  phone     String
+  isDefault Boolean @default(false)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Favourite {
+  userId    String
+  kind      String // "salon" | "product"
+  targetId  String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, kind, targetId])
+}
+
+model Salon {
+  id             String        @id @default(cuid())
+  slug           String        @unique
+  ownerId        String        @unique
+  name           String
+  tagline        String        @default("")
+  description    String        @default("") @db.Text
+  category       SalonCategory @default(parrucchiere)
+  city           String        @default("")
+  address        String        @default("")
+  zip            String        @default("")
+  lat            Float         @default(38.9)
+  lng            Float         @default(16.6)
+  phone          String        @default("")
+  email          String        @default("")
+  cover          String        @default("") @db.Text
+  logo           String?       @db.Text
+  gallery        Json // string[]
+  hours          Json // OpeningHours[]
+  amenities      Json // string[]
+  policies       Json // { cancellation, noShow, shippingZones, shippingFee(euro), freeShippingOver(euro) }
+  rating         Float         @default(0)
+  reviewCount    Int           @default(0)
+  status         SalonStatus   @default(draft)
+  commissionBps  Int           @default(1500)
+  featured       Boolean       @default(false)
+  verified       Boolean       @default(false)
+  priceLevel     Int           @default(2)
+  // Stripe Connect (Express) account used for withdrawals
+  stripeAccountId    String?
+  stripePayoutsReady Boolean   @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  owner       User               @relation(fields: [ownerId], references: [id])
+  application SellerApplication?
+  staff       Staff[]
+  services    Service[]
+  products    Product[]
+  bookings    Booking[]
+  windows     TimeWindow[]
+  subOrders   SubOrder[]
+  reviews     Review[]
+  ledger      LedgerEntry[]
+  withdrawals Withdrawal[]
+
+  @@index([status, city])
+}
+
+model SellerApplication {
+  id              String      @id @default(cuid())
+  salonId         String      @unique
+  ownerId         String
+  ragioneSociale  String      @default("")
+  pIva            String      @default("")
+  codiceFiscale   String      @default("")
+  sdi             String      @default("")
+  pec             String      @default("")
+  legalAddress    String      @default("")
+  iban            String      @default("")
+  accountHolder   String      @default("")
+  status          SalonStatus @default(draft)
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  rejectionReason String?     @db.Text
+  adminNotes      String?     @db.Text
+  checklist       Json // { docs, vat, iban, photos }
+  salon           Salon       @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  documents       ApplicationDocument[]
+}
+
+model ApplicationDocument {
+  id            String            @id @default(cuid())
+  applicationId String
+  type          String // visura | id | license | other
+  name          String
+  fileKey       String // private storage key, served by signed URL only
+  uploadedAt    DateTime          @default(now())
+  application   SellerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+}
+
+model Staff {
+  id          String  @id @default(cuid())
+  salonId     String
+  name        String
+  role        String  @default("")
+  photo       String  @default("") @db.Text
+  bio         String  @default("") @db.Text
+  serviceIds  Json // string[]
+  workingDays Json // number[] 0=Mon..6=Sun
+  active      Boolean @default(true)
+  salon       Salon   @relation(fields: [salonId], references: [id], onDelete: Cascade)
+
+  @@index([salonId])
+}
+
+model Service {
+  id          String    @id @default(cuid())
+  salonId     String
+  category    String
+  name        String
+  description String    @default("") @db.Text
+  images      Json // string[], first = cover
+  durationMin Int
+  priceCents  Int
+  bufferMin   Int       @default(0)
+  depositPct  Int       @default(0)
+  active      Boolean   @default(true)
+  popular     Boolean   @default(false)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  salon       Salon     @relation(fields: [salonId], references: [id], onDelete: Cascade)
+
+  @@index([salonId])
+}
+
+model Product {
+  id              String          @id @default(cuid())
+  salonId         String
+  brand           String
+  category        ProductCategory
+  name            String
+  short           String          @default("")
+  description     String          @default("") @db.Text
+  images          Json // string[]
+  priceCents      Int
+  compareAtCents  Int?
+  stock           Int             @default(0)
+  sku             String          @default("")
+  inci            String          @default("") @db.Text
+  howToUse        String          @default("") @db.Text
+  rating          Float           @default(0)
+  reviewCount     Int             @default(0)
+  status          ProductStatus   @default(draft)
+  rejectionReason String?         @db.Text
+  weightGr        Int             @default(0)
+  isNew           Boolean         @default(false)
+  sold            Int             @default(0)
+  deletedAt       DateTime?
+  createdAt       DateTime        @default(now())
+  salon           Salon           @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  variants        ProductVariant[]
+
+  @@index([salonId])
+  @@index([status, category])
+}
+
+model ProductVariant {
+  id              String  @id @default(cuid())
+  productId       String
+  label           String
+  priceDeltaCents Int     @default(0)
+  stock           Int     @default(0)
+  product         Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Booking {
+  id               String        @id @default(cuid())
+  code             String        @unique
+  customerId       String?
+  customerName     String
+  customerPhone    String        @default("")
+  salonId          String
+  staffId          String?
+  serviceIds       Json // string[]
+  date             String        @db.VarChar(10) // YYYY-MM-DD, salon local time (Europe/Rome)
+  startMin         Int // minutes from midnight
+  durationMin      Int
+  totalCents       Int
+  depositCents     Int           @default(0)
+  paidCents        Int           @default(0) // paid online
+  paymentMode      PaymentMode
+  status           BookingStatus
+  notes            String?       @db.Text
+  pickupProductIds Json?
+  reviewed         Boolean       @default(false)
+  holdExpiresAt    DateTime? // for awaiting_payment
+  cancelledAt      DateTime?
+  createdAt        DateTime      @default(now())
+  /** booked inside a salon time window: takes one of its places, never normal capacity */
+  windowId         String?
+  salon            Salon         @relation(fields: [salonId], references: [id])
+  customer         User?         @relation(fields: [customerId], references: [id])
+  window           TimeWindow?   @relation(fields: [windowId], references: [id])
+
+  @@index([salonId, date])
+  @@index([customerId])
+  @@index([windowId])
+}
+
+/// A block of time a salon opens on purpose with N places and a list of services.
+/// staffId set = that person is reserved for the whole window (blocks their normal slots).
+model TimeWindow {
+  id         String    @id @default(cuid())
+  salonId    String
+  date       String    @db.VarChar(10) // YYYY-MM-DD, Europe/Rome
+  startMin   Int
+  endMin     Int
+  serviceIds Json // string[]
+  capacity   Int
+  staffId    String?
+  note       String    @default("") @db.VarChar(120)
+  open       Boolean   @default(true) // false = no new bookings
+  createdAt  DateTime  @default(now())
+  salon      Salon     @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  bookings   Booking[]
+
+  @@index([salonId, date])
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  code          String      @unique
+  customerId    String
+  customerName  String
+  address       Json?
+  paymentMethod String      @default("card")
+  couponCode    String?
+  discountCents Int         @default(0)
+  totalCents    Int
+  status        OrderStatus @default(pending_payment)
+  holdExpiresAt DateTime?
+  createdAt     DateTime    @default(now())
+  customer      User        @relation(fields: [customerId], references: [id])
+  subOrders     SubOrder[]
+
+  @@index([customerId])
+}
+
+model SubOrder {
+  id               String         @id @default(cuid())
+  code             String         @unique
+  orderId          String
+  salonId          String
+  items            Json // OrderItem[] snapshot (euros) + variant ids
+  shippingMethod   ShippingMethod
+  shippingFeeCents Int            @default(0)
+  subtotalCents    Int
+  salonDiscountCents Int          @default(0) // salon-funded coupon share (reduces seller earnings)
+  platformDiscountCents Int       @default(0) // platform-funded coupon share (customer paid less, seller still earns full)
+  status           SubOrderStatus @default(awaiting_payment)
+  trackingNo       String?
+  carrier          String?
+  timeline         Json // { status, at }[]
+  returnRequested  Boolean        @default(false)
+  returnReason     String?        @db.Text
+  deliveredAt      DateTime?
+  shippedAt        DateTime?
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  salon            Salon          @relation(fields: [salonId], references: [id])
+
+  @@index([salonId, status])
+}
+
+model Review {
+  id             String   @id @default(cuid())
+  customerId     String
+  customerName   String
+  customerAvatar String?  @db.Text
+  salonId        String
+  productId      String?
+  bookingId      String?
+  rating         Int
+  text           String   @db.Text
+  reply          String?  @db.Text
+  hidden         Boolean  @default(false)
+  reported       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  customer       User     @relation(fields: [customerId], references: [id])
+  salon          Salon    @relation(fields: [salonId], references: [id])
+
+  @@index([salonId])
+  @@index([productId])
+}
+
+model Coupon {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  type          String // percent | fixed
+  value         Int // percent (10) or cents for fixed
+  scope         String // "platform" or salonId
+  minSpendCents Int      @default(0)
+  uses          Int      @default(0)
+  maxUses       Int      @default(100)
+  active        Boolean  @default(true)
+  expiresAt     String   @db.VarChar(10)
+  createdAt     DateTime @default(now())
+}
+
+model Notification {
+  id     String   @id @default(cuid())
+  userId String
+  title  String
+  body   String   @db.Text
+  link   String?
+  read   Boolean  @default(false)
+  at     DateTime @default(now())
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+model Banner {
+  id       String  @id @default(cuid())
+  title    String
+  subtitle String  @default("")
+  image    String  @db.Text
+  cta      String  @default("")
+  link     String  @default("")
+  active   Boolean @default(true)
+  sort     Int     @default(0)
+}
+
+model SupportTicket {
+  id         String   @id @default(cuid())
+  userId     String?
+  from       String
+  subject    String
+  message    String   @default("") @db.Text
+  status     String   @default("open")
+  at         DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id])
+}
+
+model PlatformSetting {
+  key   String @id
+  value Json
+}
+
+// ───────────── Money ─────────────
+
+model Payment {
+  id                    String        @id @default(cuid())
+  provider              String        @default("stripe") // stripe | mock
+  providerPaymentId     String        @unique // PaymentIntent id
+  kind                  String // booking | order
+  bookingId             String?
+  orderId               String?
+  customerId            String
+  amountCents           Int
+  refundedCents         Int           @default(0)
+  currency              String        @default("eur")
+  status                PaymentStatus @default(requires_payment)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  customer              User          @relation(fields: [customerId], references: [id])
+
+  @@index([bookingId])
+  @@index([orderId])
+}
+
+model LedgerEntry {
+  id              String       @id @default(cuid())
+  salonId         String
+  type            LedgerType
+  amountCents     Int // signed gross amount credited to the salon
+  commissionBps   Int // rate frozen at the time of the sale
+  commissionCents Int // signed commission the platform keeps (deducted at withdrawal)
+  sourceType      String // booking | sub_order | admin
+  sourceId        String
+  description     String       @default("")
+  status          LedgerStatus @default(pending)
+  availableAt     DateTime? // when it becomes withdrawable (null = waiting for an event)
+  withdrawalId    String?
+  createdAt       DateTime     @default(now())
+  salon           Salon        @relation(fields: [salonId], references: [id])
+  withdrawal      Withdrawal?  @relation(fields: [withdrawalId], references: [id])
+
+  @@index([salonId, status])
+  @@index([sourceType, sourceId])
+}
+
+model Withdrawal {
+  id               String           @id @default(cuid())
+  salonId          String
+  grossCents       Int
+  commissionCents  Int
+  netCents         Int
+  status           WithdrawalStatus @default(requested)
+  auto             Boolean          @default(false)
+  stripeTransferId String?
+  failureReason    String?          @db.Text
+  requestedAt      DateTime         @default(now())
+  decidedAt        DateTime?
+  decidedById      String?
+  paidAt           DateTime?
+  salon            Salon            @relation(fields: [salonId], references: [id])
+  entries          LedgerEntry[]
+
+  @@index([salonId, status])
+}
+
+model StripeEvent {
+  id          String   @id // Stripe event id, for idempotent webhook handling
+  type        String
+  processedAt DateTime @default(now())
+}
+
+model AuditLog {
+  id       String   @id @default(cuid())
+  actorId  String?
+  action   String
+  entity   String
+  entityId String
+  data     Json?
+  at       DateTime @default(now())
+
+  @@index([entity, entityId])
+}

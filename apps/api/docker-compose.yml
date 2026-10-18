@@ -1,0 +1,40 @@
+# Dokploy → Docker Compose (repo root = GitHub project root)
+# Attach a MySQL service in Dokploy (or use the mysql service below) and set DATABASE_URL.
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "80:80"
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      API_PUBLIC_URL: ${API_PUBLIC_URL}
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      RUN_JOBS: ${RUN_JOBS:-true}
+    volumes:
+      - api-uploads:/app/uploads
+    restart: unless-stopped
+
+  # Optional local MySQL — on Dokploy prefer a managed/external MySQL and delete this service
+  # mysql:
+  #   image: mysql:8.4
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+  #     MYSQL_DATABASE: mybeauty
+  #     MYSQL_USER: mybeauty
+  #     MYSQL_PASSWORD: ${MYSQL_PASSWORD:-mybeauty}
+  #   volumes:
+  #     - mysql-data:/var/lib/mysql
+  #   restart: unless-stopped
+
+volumes:
+  api-uploads:
